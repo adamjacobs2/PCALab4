@@ -125,10 +125,9 @@ int main (int argc, char *argv[]){
             MPI_Send(&offset, 1, MPI_INT, dest, FROM_MASTER, MPI_COMM_WORLD);
             MPI_Send(&send_rows, 1, MPI_INT, dest, FROM_MASTER, MPI_COMM_WORLD);
 
-            // Use start_row for the pointer, send_rows for the count
             MPI_Send(&pixels[start_row * width], send_rows * width, MPI_INT, dest, FROM_MASTER, MPI_COMM_WORLD);
 
-            offset = offset + rows; // Increment by REAL rows assigned
+            offset = offset + rows; 
         }
 
         /* Receive results from worker tasks */
@@ -143,7 +142,7 @@ int main (int argc, char *argv[]){
           printf("Received results from task %d\n",source);
         }
 
-          //end = clock();
+  
         end = now();
         time_spent = tdiff(begin, end);
 
@@ -187,18 +186,18 @@ int main (int argc, char *argv[]){
         int *workerPixels = malloc(width * local_rows * sizeof(int));
         int *workerEdges = calloc(width * local_rows, sizeof(int)); 
 
-        // Receive pixel data (including halos)
+   
         MPI_Recv(workerPixels, local_rows * width, MPI_INT, MASTER, mtype, MPI_COMM_WORLD, &status);
 
-        // Apply filter to the local chunk
+
         apply_sobel_omp(workerPixels, workerEdges, width, local_rows);
 
-        // CRITICAL: Determine how many "real" rows to send back
+
         int averow = height / numworkers;
         int extra = height % numworkers;
         int actual_rows = (taskid <= extra) ? averow + 1 : averow;
         
-        // If we have a top halo, the processed data starts at row index 1
+     
         int start_index = (original_offset == 0) ? 0 : 1;
 
         mtype = FROM_WORKER;
