@@ -119,7 +119,7 @@ int main (int argc, char *argv[]){
           printf("Sending %d rows to task %d offset=%d\n",rows,dest,offset);
           MPI_Send(&offset, 1, MPI_INT, dest, mtype, MPI_COMM_WORLD);
           MPI_Send(&rows, 1, MPI_INT, dest, mtype, MPI_COMM_WORLD);
-          MPI_Send(&pixels[offset * width], rows*width, dest, mtype,MPI_COMM_WORLD);        
+          MPI_Send(&pixels[offset * width], rows*width, MPI_INT, dest, mtype, MPI_COMM_WORLD);        
           offset = offset + rows;
         }
 
@@ -130,7 +130,7 @@ int main (int argc, char *argv[]){
           source = i;
           MPI_Recv(&offset, 1, MPI_INT, source, mtype, MPI_COMM_WORLD, &status);
           MPI_Recv(&rows, 1, MPI_INT, source, mtype, MPI_COMM_WORLD, &status);
-          MPI_Recv(&edges[offset * width], rows*NCB, MPI_INT, source, mtype, 
+          MPI_Recv(&edges[offset * width], rows*width, MPI_INT, source, mtype, 
                     MPI_COMM_WORLD, &status);
           printf("Received results from task %d\n",source);
         }
@@ -162,7 +162,7 @@ int main (int argc, char *argv[]){
         printf ("\n");
 
         free(pixels);
-        free(edges)
+        free(edges);
     }
 
 
