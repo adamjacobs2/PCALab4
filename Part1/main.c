@@ -28,7 +28,7 @@ int main() {
     int *pixels = malloc(width * height * sizeof(int));
     int *edges = calloc(width * height, sizeof(int));
 
-    FILE *file = fopen("processed_matrix.txt", "r");
+    FILE *file = fopen("input.txt", "r");
     if (!file || !pixels) return 1;
 
     for (int i = 0; i < width * height; i++) {

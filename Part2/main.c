@@ -95,7 +95,7 @@ int main (int argc, char *argv[]){
         int *pixels = malloc(width * height * sizeof(int));
         int *edges = calloc(width * height, sizeof(int));  
 
-        FILE *file = fopen("processed_matrix.txt", "r");
+        FILE *file = fopen("input.txt", "r");
         if (!file || !pixels) return 1;
 
         printf("Reading image...\n");
