@@ -113,19 +113,22 @@ int main (int argc, char *argv[]){
         //begin = clock();
         begin = now();
         
-        for (dest=1; dest<=numworkers; dest++)
-        {
-            rows = (dest <= extra) ? averow+1 : averow;   	
-            // We send an extra row above and below if they exist
-            int send_offset = (offset == 0) ? offset : offset - 1;
+        for (dest=1; dest<=numworkers; dest++) {
+            rows = (dest <= extra) ? averow+1 : averow;
+
+            // Logic for halo boundaries
+            int start_row = (offset == 0) ? offset : offset - 1;
             int send_rows = rows;
-            if (offset > 0) send_rows++; // top halo
-            if (offset + rows < height) send_rows++; // bottom halo
-            printf("Sending %d rows to task %d offset=%d\n",rows,dest,offset);
-            MPI_Send(&offset, 1, MPI_INT, dest, mtype, MPI_COMM_WORLD);
-            MPI_Send(&send_rows, 1, MPI_INT, dest, mtype, MPI_COMM_WORLD);
-            MPI_Send(&pixels[offset * width], rows*width, MPI_INT, dest, mtype, MPI_COMM_WORLD);        
-            offset = offset + rows;
+            if (offset > 0) send_rows++;                 // Top halo
+            if (offset + rows < height) send_rows++;     // Bottom halo
+
+            MPI_Send(&offset, 1, MPI_INT, dest, FROM_MASTER, MPI_COMM_WORLD);
+            MPI_Send(&send_rows, 1, MPI_INT, dest, FROM_MASTER, MPI_COMM_WORLD);
+
+            // Use start_row for the pointer, send_rows for the count
+            MPI_Send(&pixels[start_row * width], send_rows * width, MPI_INT, dest, FROM_MASTER, MPI_COMM_WORLD);
+
+            offset = offset + rows; // Increment by REAL rows assigned
         }
 
         /* Receive results from worker tasks */
@@ -171,32 +174,43 @@ int main (int argc, char *argv[]){
     }
 
 
-  /**************************** worker task ************************************/
-    if (taskid > MASTER)
-    {
+
+   /**************************** worker task ************************************/
+    if (taskid > MASTER) {
         mtype = FROM_MASTER;
-        int local_rows;
-        MPI_Recv(&offset, 1, MPI_INT, MASTER, mtype, MPI_COMM_WORLD, &status);
+        int local_rows, original_offset;
+
+        // Receive metadata from Master
+        MPI_Recv(&original_offset, 1, MPI_INT, MASTER, mtype, MPI_COMM_WORLD, &status);
         MPI_Recv(&local_rows, 1, MPI_INT, MASTER, mtype, MPI_COMM_WORLD, &status);
 
-
         int *workerPixels = malloc(width * local_rows * sizeof(int));
-        int *workerEdges = calloc(width * local_rows, sizeof(int));  
+        int *workerEdges = calloc(width * local_rows, sizeof(int)); 
 
+        // Receive pixel data (including halos)
         MPI_Recv(workerPixels, local_rows * width, MPI_INT, MASTER, mtype, MPI_COMM_WORLD, &status);
 
-              
-       apply_sobel_omp(workerPixels, workerEdges, width, local_rows);
+        // Apply filter to the local chunk
+        apply_sobel_omp(workerPixels, workerEdges, width, local_rows);
+
+        // CRITICAL: Determine how many "real" rows to send back
+        int averow = height / numworkers;
+        int extra = height % numworkers;
+        int actual_rows = (taskid <= extra) ? averow + 1 : averow;
         
-          
+        // If we have a top halo, the processed data starts at row index 1
+        int start_index = (original_offset == 0) ? 0 : 1;
+
         mtype = FROM_WORKER;
-        MPI_Send(&offset, 1, MPI_INT, MASTER, mtype, MPI_COMM_WORLD);
-        MPI_Send(&local_rows, 1, MPI_INT, MASTER, mtype, MPI_COMM_WORLD);
-        MPI_Send(workerEdges, local_rows*width, MPI_INT, MASTER, mtype, MPI_COMM_WORLD);
+        MPI_Send(&original_offset, 1, MPI_INT, MASTER, mtype, MPI_COMM_WORLD);
+        MPI_Send(&actual_rows, 1, MPI_INT, MASTER, mtype, MPI_COMM_WORLD);
+        
+        // Send back ONLY the clean rows (actual_rows), skipping the top halo row
+        MPI_Send(&workerEdges[start_index * width], actual_rows * width, MPI_INT, MASTER, mtype, MPI_COMM_WORLD);
+
         free(workerEdges);
         free(workerPixels);
     }
-
 
 
 
