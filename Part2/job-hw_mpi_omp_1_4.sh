@@ -7,8 +7,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=1000mb
 #SBATCH -t 00:05:00
-#SBATCH -o test
+#SBATCH -o 1Nodes_4Ranks
 #SBATCH -e errfile
 export OMP_NUM_THREADS=4
-export OMP_PROC_BIND=close
 srun --mpi=$HPC_PMIX ./a.out
