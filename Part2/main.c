@@ -1,18 +1,38 @@
+/*mat_mult.c */
+
+#include "mpi.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 #include <math.h>
-#include <mpi.h>
 #include <omp.h>
 
-void apply_sobel_chunk(int *input, int *output, int width, int local_height, int total_height, int rank, int size) {
+/*   ttype: type to use for representing time */
+typedef double ttype;
+ttype tdiff(struct timespec a, struct timespec b)
+/* Find the time difference. */
+{
+  ttype dt = (( b.tv_sec - a.tv_sec ) + ( b.tv_nsec - a.tv_nsec ) / 1E9);
+  return dt;
+}
+
+struct timespec now()
+/* Return the current time. */
+{
+  struct timespec t;
+  clock_gettime(CLOCK_REALTIME, &t);
+  return t;
+}
+
+
+void apply_sobel_omp(int *input, int *output, int width, int height) {
     int Gx[3][3] = {{-1, 0, 1}, {-2, 0, 2}, {-1, 0, 1}};
     int Gy[3][3] = {{-1, -2, -1}, {0, 0, 0}, {1, 2, 1}};
-
-    // OpenMP parallelizes the row processing
     #pragma omp parallel for collapse(2)
-    for (int y = 1; y < local_height - 1; y++) {
+    for (int y = 1; y < height - 1; y++) {
         for (int x = 1; x < width - 1; x++) {
             float sumX = 0, sumY = 0;
+
             for (int i = -1; i <= 1; i++) {
                 for (int j = -1; j <= 1; j++) {
                     int pixel = input[(y + i) * width + (x + j)];
@@ -20,75 +40,163 @@ void apply_sobel_chunk(int *input, int *output, int width, int local_height, int
                     sumY += pixel * Gy[i + 1][j + 1];
                 }
             }
-            int mag = (int)sqrt(sumX * sumX + sumY * sumY);
-            output[y * width + x] = (mag > 255) ? 255 : mag;
+        
+            int magnitude = (int)sqrt(sumX * sumX + sumY * sumY);
+            output[y * width + x] = (magnitude > 255) ? 255 : magnitude;
         }
     }
 }
 
-int main(int argc, char** argv) {
-    int width = 5000, height = 5000; 
-    int rank, size;
+#define MASTER 0               /* taskid of first task */
+#define FROM_MASTER 1          /* setting a message type */
+#define FROM_WORKER 2          /* setting a message type */
 
-    MPI_Init(&argc, &argv);
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &size);
+int main (int argc, char *argv[]){
 
-    int local_height = height / size;
-    int chunk_size = width * local_height;
+
+    int	numtasks,            /* number of tasks in partition */
+    taskid,                /* a task identifier */
+    numworkers,            /* number of worker tasks */
+    source,                /* task id of message source */
+    dest,                  /* task id of message destination */
+    mtype,                 /* message type */
+    rows,                  /* rows of matrix A sent to each worker */
+    averow, extra, offset, /* used to determine rows sent to each worker */
+    i, j, k, rc;           /* misc */
+
+  
+    MPI_Status status;
+
+    //clock_t begin, end;
+    struct timespec begin, end;
+    double time_spent;
+ 
     
-    // We need 2 extra rows for the "Halo" (top and bottom neighbors)
-    int *local_input = calloc(width * (local_height + 2), sizeof(int));
-    int *local_output = calloc(width * (local_height + 2), sizeof(int));
-    int *full_image = NULL;
 
-    if (rank == 0) {
-        full_image = malloc(width * height * sizeof(int));
-        FILE *f = fopen("pixels.txt", "r");
-        for (int i = 0; i < width * height; i++) fscanf(f, "%d", &full_image[i]);
-        fclose(f);
+    
+    MPI_Init(&argc,&argv);
+    MPI_Comm_rank(MPI_COMM_WORLD,&taskid);
+    MPI_Comm_size(MPI_COMM_WORLD,&numtasks);
+
+
+    if (numtasks < 2 ){
+        printf("Need at least two MPI tasks. Quitting...\n");
+        MPI_Abort(MPI_COMM_WORLD, rc);
+        exit(1);
     }
+    numworkers = numtasks-1;
+    int width = 5000, height = 5000; 
 
-    // Distribute the image chunks to all processes
-    MPI_Scatter(full_image, chunk_size, MPI_INT, 
-                &local_input[width], chunk_size, MPI_INT, 0, MPI_COMM_WORLD);
+  /**************************** master task ************************************/
+    if (taskid == MASTER){
+        printf("mpi_mm has started with %d tasks.\n",numtasks);
 
-    // --- Halo Exchange ---
-    int top_neighbor = (rank == 0) ? MPI_PROC_NULL : rank - 1;
-    int bot_neighbor = (rank == size - 1) ? MPI_PROC_NULL : rank + 1;
+    
+        int *pixels = malloc(width * height * sizeof(int));
+        int *edges = calloc(width * height, sizeof(int));  
 
-    // Send bottom row, receive into top halo
-    MPI_Sendrecv(&local_input[chunk_size], width, MPI_INT, bot_neighbor, 0,
-                 &local_input[0], width, MPI_INT, top_neighbor, 0, 
-                 MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        FILE *file = fopen("processed_matrix.txt", "r");
+        if (!file || !pixels) return 1;
 
-    // Send top row, receive into bottom halo
-    MPI_Sendrecv(&local_input[width], width, MPI_INT, top_neighbor, 1,
-                 &local_input[chunk_size + width], width, MPI_INT, bot_neighbor, 1, 
-                 MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        printf("Reading image...\n");
+    
+        for (int i = 0; i < width * height; i++) {
+            if (fscanf(file, "%d", &pixels[i]) != 1) break;
+        }
+    
+        /* Send matrix data to the worker tasks */
+        averow = height/numworkers;
+        extra = height%numworkers;
+        offset = 0;
+        mtype = FROM_MASTER;
 
-    apply_sobel_chunk(local_input, local_output, width, local_height + 2, height, rank, size);
+        //begin = clock();
+        begin = now();
+        
+        for (dest=1; dest<=numworkers; dest++)
+        {
+          rows = (dest <= extra) ? averow+1 : averow;   	
+          printf("Sending %d rows to task %d offset=%d\n",rows,dest,offset);
+          MPI_Send(&offset, 1, MPI_INT, dest, mtype, MPI_COMM_WORLD);
+          MPI_Send(&rows, 1, MPI_INT, dest, mtype, MPI_COMM_WORLD);
+          MPI_Send(&pixels[offset * width], rows*width, dest, mtype,MPI_COMM_WORLD);        
+          offset = offset + rows;
+        }
 
-    // Gather results back to Rank 0
-    int *final_edges = NULL;
-    if (rank == 0) final_edges = malloc(width * height * sizeof(int));
+        /* Receive results from worker tasks */
+        mtype = FROM_WORKER;
+        for (i=1; i<=numworkers; i++)
+        {
+          source = i;
+          MPI_Recv(&offset, 1, MPI_INT, source, mtype, MPI_COMM_WORLD, &status);
+          MPI_Recv(&rows, 1, MPI_INT, source, mtype, MPI_COMM_WORLD, &status);
+          MPI_Recv(&edges[offset * width], rows*NCB, MPI_INT, source, mtype, 
+                    MPI_COMM_WORLD, &status);
+          printf("Received results from task %d\n",source);
+        }
 
-    MPI_Gather(&local_output[width], chunk_size, MPI_INT, 
-               final_edges, chunk_size, MPI_INT, 0, MPI_COMM_WORLD);
+          //end = clock();
+        end = now();
+        time_spent = tdiff(begin, end);
 
-    if (rank == 0) {
+
+
         FILE *f_out = fopen("output_edges.txt", "w");
-        for (int i = 0; i < height; i++) {
-            for (int j = 0; j < width; j++) fprintf(f_out, "%d ", final_edges[i * width + j]);
+        if (!f_out) {
+            perror("Error creating output file");
+            return 1;
+        }
+
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                fprintf(f_out, "%d ", edges[y * width + x]);
+            }
             fprintf(f_out, "\n");
         }
         fclose(f_out);
-        free(full_image);
-        free(final_edges);
+          
+        
+        printf("\n******************************************************\n");
+        printf ("\n");
+        printf("total time: %.8f sec\n", time_spent);
+        printf ("\n");
+
+        free(pixels);
+        free(edges)
     }
 
-    free(local_input);
-    free(local_output);
+
+  /**************************** worker task ************************************/
+    if (taskid > MASTER)
+    {
+       
+
+        mtype = FROM_MASTER;
+
+        MPI_Recv(&offset, 1, MPI_INT, MASTER, mtype, MPI_COMM_WORLD, &status);
+        MPI_Recv(&rows, 1, MPI_INT, MASTER, mtype, MPI_COMM_WORLD, &status);
+
+
+        int *workerPixels = malloc(width * rows * sizeof(int));
+        int *workerEdges = calloc(width * rows, sizeof(int));  
+
+        MPI_Recv(workerPixels, rows*width, MPI_INT, MASTER, mtype, MPI_COMM_WORLD, &status);
+
+              
+       apply_sobel_omp(workerPixels, workerEdges, width, height);
+        
+          
+        mtype = FROM_WORKER;
+        MPI_Send(&offset, 1, MPI_INT, MASTER, mtype, MPI_COMM_WORLD);
+        MPI_Send(&rows, 1, MPI_INT, MASTER, mtype, MPI_COMM_WORLD);
+        MPI_Send(workerEdges, rows*width, MPI_INT, MASTER, mtype, MPI_COMM_WORLD);
+        free(workerEdges);
+        free(workerPixels);
+    }
+
+
+
+
     MPI_Finalize();
-    return 0;
+   
 }
