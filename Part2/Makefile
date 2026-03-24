@@ -9,4 +9,4 @@ LIBS = -lm
 all: $(TARGETS)
 
 all: 
-	mpicc -fopenmp main.c -o a.out $(LIBS)
+	mpicc -qopenmp main.c -o a.out $(LIBS)
