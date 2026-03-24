@@ -9,4 +9,4 @@
 #SBATCH -t 00:05:00
 #SBATCH -o test
 #SBATCH -e errfile
-srun  ./a.out
+srun  ./main
