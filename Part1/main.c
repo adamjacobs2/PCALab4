@@ -64,6 +64,7 @@ int main() {
     end = now();
     time_spent = tdiff(begin, end);
 
+
     FILE *f_out = fopen("output_edges.txt", "w");
     if (!f_out) {
         perror("Error creating output file");
@@ -78,7 +79,11 @@ int main() {
     }
     fclose(f_out);
 
-
+    printf("\n******************************************************\n");
+    printf ("\n");
+    printf("total time: %.8f sec\n", time_spent);
+    printf ("\n");
+    
     fclose(file);
     free(pixels);
     free(edges);
