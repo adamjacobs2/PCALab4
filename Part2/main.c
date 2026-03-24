@@ -110,7 +110,7 @@ int main (int argc, char *argv[]){
         offset = 0;
         mtype = FROM_MASTER;
 
-        //begin = clock();
+        //start timer right before distrubution on data
         begin = now();
         
         for (dest=1; dest<=numworkers; dest++) {
@@ -139,15 +139,14 @@ int main (int argc, char *argv[]){
           MPI_Recv(&rows, 1, MPI_INT, source, mtype, MPI_COMM_WORLD, &status);
           MPI_Recv(&edges[offset * width], rows*width, MPI_INT, source, mtype, 
                     MPI_COMM_WORLD, &status);
-          printf("Received results from task %d\n",source);
         }
 
-  
+        //end timer after image is produced
         end = now();
         time_spent = tdiff(begin, end);
 
 
-
+        //write image to file
         FILE *f_out = fopen("output_edges.txt", "w");
         if (!f_out) {
             perror("Error creating output file");
